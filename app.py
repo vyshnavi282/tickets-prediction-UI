@@ -42,7 +42,6 @@ def ordinal(n):
 
 def format_date(dt: datetime):
     return f"{ordinal(dt.day)} {dt.strftime('%b %Y')}"
-
 # ---------------------
 # Helpers
 # ---------------------
@@ -58,7 +57,6 @@ def fetch_api(path, params=None):
 def parse_predictions(payload):
     if not payload or (isinstance(payload, dict) and 'error' in payload):
         return None, payload.get('error') if isinstance(payload, dict) else "No data"
-
     preds = None
     if isinstance(payload, dict) and 'data' in payload and 'predictions' in payload['data']:
         preds = payload['data']['predictions']
@@ -66,13 +64,11 @@ def parse_predictions(payload):
         preds = payload['predictions']
     else:
         preds = payload
-
     if isinstance(preds, dict):
         df = pd.DataFrame(list(preds.items()), columns=['date', 'value'])
         df['date'] = pd.to_datetime(df['date'])
         df['value'] = df['value'].round().astype(int)
         return df.sort_values('date'), None
-
     if isinstance(preds, list):
         if len(preds) > 0 and isinstance(preds[0], dict):
             date_key = None
@@ -88,7 +84,6 @@ def parse_predictions(payload):
                 date_key = list(candidates)[0]
             if not value_key and len(candidates) >= 2:
                 value_key = list(candidates)[1]
-
             rows = []
             for item in preds:
                 try:
@@ -104,14 +99,12 @@ def parse_predictions(payload):
             except Exception:
                 pass
             return df.sort_values('date'), None
-
         if all(isinstance(x, (int, float)) for x in preds):
             today = datetime.now().date()
             rows = [(today + timedelta(days=i), round(preds[i])) for i in range(len(preds))]
             df = pd.DataFrame(rows, columns=['date', 'value'])
             df['date'] = pd.to_datetime(df['date'])
             return df, None
-
     return None, "Unable to parse prediction payload"
 
 # Plot with Plotly (interactive hover)
@@ -119,12 +112,9 @@ def plot_predictions(df, title="Ticket Volume Predictions"):
     if df is None or df.empty:
         st.warning("No prediction data to plot")
         return
-
     df['date_str'] = df['date'].dt.day.map(ordinal) + df['date'].dt.strftime(" %b %Y")
-
     max_idx = df['value'].idxmax()
     min_idx = df['value'].idxmin()
-
     fig = px.bar(
         df,
         x='date',
@@ -150,17 +140,14 @@ def plot_predictions(df, title="Ticket Volume Predictions"):
     )
     fig.update_xaxes(tickangle=45)
     st.plotly_chart(fig, use_container_width=True)
-
     total = int(df['value'].sum())
     max_v = int(df.loc[max_idx, 'value'])
     min_v = int(df.loc[min_idx, 'value'])
     max_date = df.loc[max_idx, 'date']
     min_date = df.loc[min_idx, 'date']
-
     st.markdown("---")
     st.markdown("### Summary")
     col1, col2, col3 = st.columns(3)
-
     with col1:
         st.markdown(f"""
         <div class="metric-card">
@@ -168,7 +155,6 @@ def plot_predictions(df, title="Ticket Volume Predictions"):
             <div class="metric-value">{total:,}</div>
         </div>
         """, unsafe_allow_html=True)
-
     with col2:
         st.markdown(f"""
         <div class="metric-card" style="background-color:#ffe6e6; color:#b30000;">
@@ -177,7 +163,6 @@ def plot_predictions(df, title="Ticket Volume Predictions"):
             <div class="date-text">{format_date(max_date)}</div>
         </div>
         """, unsafe_allow_html=True)
-
     with col3:
         st.markdown(f"""
         <div class="metric-card" style="background-color:#e6ffe6; color:#237a27;">
@@ -186,15 +171,21 @@ def plot_predictions(df, title="Ticket Volume Predictions"):
             <div class="date-text">{format_date(min_date)}</div>
         </div>
         """, unsafe_allow_html=True)
-
 # ---------------------
 # UI Layout
 # ---------------------
 st.markdown("<h1 style='color:#0b6efd; text-align:center;'> Ticket Prediction Dashboard</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align:center; color:#334e68;'>Hit the API with startdate and enddate for every prediction</p>", unsafe_allow_html=True)
 st.write("---")
+# Initialize LLM chat session state if not present
+if "llm_session_active" not in st.session_state:
+    st.session_state.llm_session_active = False
+if "llm_input" not in st.session_state:
+    st.session_state.llm_input = ""
+if "llm_response" not in st.session_state:
+    st.session_state.llm_response = ""
 
-# Left sidebar: two collapsible sections
+# Left sidebar: two collapsible sections including new LLM chat section
 with st.sidebar.expander("Predict", expanded=True):
     option = st.selectbox("Predict by:", [
         "Tomorrow",
@@ -210,6 +201,11 @@ with st.sidebar.expander("Alternative (Manual Days)"):
     # Manual days input for alternative; user enters a number of days
     manual_days = st.number_input("Manual days (enter N to predict today + N days):", min_value=1, max_value=365, value=7)
     go_btn_alt = st.button("Predict by Manual Days")
+
+# New LLM chat toggle in sidebar
+with st.sidebar.expander("LLM Prediction Chat", expanded=False):
+    if st.button("Open LLM Chat" if not st.session_state.llm_session_active else "Close LLM Chat"):
+        st.session_state.llm_session_active = not st.session_state.llm_session_active
 
 with st.sidebar.expander("Predict by Range"):
     start_date = st.date_input("Custom Start Date", value=datetime.now().date())
@@ -285,13 +281,39 @@ def trigger_range_prediction():
         st.success(f"Predictions for range {start_date} to {end_date}")
         plot_predictions(df, title=f"Range: {format_date(pd.to_datetime(start_date))} — {format_date(pd.to_datetime(end_date))}")
 
-# Button actions
+# Button actions for prediction triggers
 if go_btn_quick:
     trigger_quick_prediction(option)
 if go_btn_alt:
     trigger_alt_prediction()
 if go_btn_range:
     trigger_range_prediction()
+
+# --- LLM chat UI display area ---
+if st.session_state.llm_session_active:
+    st.markdown("## Prediction Agent Chat")
+    user_query = st.text_input("Enter your question (e.g., 'What is the trend today?')", value=st.session_state.llm_input)
+    send_pressed = st.button("Send")
+    st.session_state.llm_input = user_query
+    if send_pressed and user_query.strip():
+        with st.spinner("Getting prediction summary..."):
+            try:
+                backend_url = f"{API_BASE}/agent-predictions/"
+                resp = requests.post(backend_url, json={"query": user_query}, timeout=30)
+                resp.raise_for_status()
+                resp_json = resp.json()
+                if isinstance(resp_json, dict) and "result" in resp_json:
+                    st.session_state.llm_response = resp_json["result"]
+                elif isinstance(resp_json, str):
+                    st.session_state.llm_response = resp_json
+                else:
+                    st.session_state.llm_response = str(resp_json)
+            except Exception as e:
+                st.error(f"Failed to get response: {str(e)}")
+
+    if st.session_state.llm_response:
+        st.markdown("### Prediction Agent Response:")
+        st.markdown(f"> {st.session_state.llm_response}")
 
 # Optional: show a sample data fetch status or help
 st.write("---")
